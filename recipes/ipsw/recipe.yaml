@@ -33,7 +33,11 @@ requirements:
         - make
     - if: win
       then:
-        - zig  # Matches upstream goreleaser
+        - ${{ compiler("go-cgo") }}
+        - ${{ compiler("c") }}
+        - ${{ stdlib("c") }}
+        - make
+        # - zig
   host:
     # CGO dependencies - Go links statically, no run deps needed
     # Unix only: unicorn/libusb/libheif not available on win-64
