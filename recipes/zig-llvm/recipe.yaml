@@ -1,7 +1,7 @@
 schema_version: 1
 
 context:
-  build_number: 8
+  build_number: 1
   name: zig-llvm
   version: 20.1.8
 
@@ -9,18 +9,32 @@ context:
   m2: ${{ "m2-" if not unix }}
   sh: ${{ ".bat" if not unix else ".sh" }}
 
-  # Zig target mapping (for zig -target flag)
-  zig_target: >-
+  # Zig triplet mapping (for zig -target flag)
+  zig_triplet: >-
     ${{
-      "x86_64-linux-gnu"            if TG_ == "linux-64"       else
-      "aarch64-linux-gnu"           if TG_ == "linux-aarch64"  else
-      "powerpc64le-linux-gnu"       if TG_ == "linux-ppc64le"  else
-      "riscv64-linux-gnu"           if TG_ == "linux-riscv64"  else
-      "s390x-linux-gnu"             if TG_ == "linux-s390x"    else
-      "x86_64-macos-none"           if TG_ == "osx-64"         else
-      "aarch64-macos-none"          if TG_ == "osx-arm64"      else
-      "x86_64-windows-gnu"          if TG_ == "win-64"         else
-      "aarch64-windows-gnu"         if TG_ == "win-arm64"      else
+      "x86_64-linux-gnu." ~ c_stdlib_version       if target_platform == "linux-64"       else
+      "aarch64-linux-gnu." ~ c_stdlib_version      if target_platform == "linux-aarch64"  else
+      "powerpc64le-linux-gnu." ~ c_stdlib_version  if target_platform == "linux-ppc64le"  else
+      "riscv64-linux-gnu." ~ c_stdlib_version      if target_platform == "linux-riscv64"  else
+      "s390x-linux-gnu." ~ c_stdlib_version        if target_platform == "linux-s390x"    else
+      "x86_64-macos-none"                          if target_platform == "osx-64"         else
+      "aarch64-macos-none"                         if target_platform == "osx-arm64"      else
+      "x86_64-windows-gnu"                         if target_platform == "win-64"         else
+      "aarch64-windows-gnu"                        if target_platform == "win-arm64"      else
+      "native"
+    }}
+  # LLVM target triple (standard format, no glibc version suffix)
+  llvm_triplet: >-
+    ${{
+      "x86_64-unknown-linux-gnu"       if target_platform == "linux-64"       else
+      "aarch64-unknown-linux-gnu"      if target_platform == "linux-aarch64"  else
+      "powerpc64le-unknown-linux-gnu"  if target_platform == "linux-ppc64le"  else
+      "riscv64-unknown-linux-gnu"      if target_platform == "linux-riscv64"  else
+      "s390x-unknown-linux-gnu"        if target_platform == "linux-s390x"    else
+      "x86_64-apple-darwin"            if target_platform == "osx-64"         else
+      "aarch64-apple-darwin"           if target_platform == "osx-arm64"      else
+      "x86_64-w64-windows-gnu"         if target_platform == "win-64"         else
+      "aarch64-w64-windows-gnu"        if target_platform == "win-arm64"      else
       "native"
     }}
 
@@ -36,9 +50,17 @@ source:
       - patches/0002-fix-non-unix-zstd-shared-lib-finding.patch
 
 build:
+  number: ${{ build_number }}
+  # libc++/libc++abi/libunwind NEEDED entries are intentionally added to libLLVM.so
+  # and libclang-cpp.so so zig's ZigClangIsLLVMUsingSeparateLibcxx() check passes.
+  # rattler-build flags these as "overlinking" since symbols resolve transitively,
+  # but the direct NEEDED entries are required for zig compatibility.
+  dynamic_linking:
+    overlinking_behavior: ignore
   script:
     env:
-      ZIG_TARGET: ${{ zig_target }}
+      LLVM_TRIPLET: ${{ llvm_triplet }}
+      ZIG_TRIPLET: ${{ zig_triplet }}
       ZIG_LLVM_SKIP_BUILD: 1
 
 requirements:
@@ -48,12 +70,15 @@ requirements:
     - cmake >=3.19
     - git
     - ninja
+    - if: linux
+      then:
+        - lld
+        - patchelf
     - zig >=0.15.2 *_7
-    # Cross-compilation: need host tablegen tools
+    # Cross-compilation: need host tablegen tools (provided by zig-llvm itself)
     - if: build_platform != target_platform
       then:
-        - llvmdev ${{ version }}.*   # provides llvm-tblgen
-        - clangdev ${{ version }}.*  # provides clang-tblgen
+        - ${{ name }} ${{ version }}.*
     - if: not unix
       then:
         - ${{ m2 }}coreutils
@@ -64,86 +89,81 @@ requirements:
   host:
     - zlib
     - zstd
-    - libxml2
+    # - libxml2
+  run_exports:
+    - ${{ pin_subpackage(name, upper_bound='x.x') }}
 
 tests:
-  # Test 1: Verify package structure
+  # Verify package structure
   - package_contents:
       strict: true
       files:
-        # Installed to lib/zig-llvm/ to avoid conflicts with conda-forge llvmdev
-        - lib/zig-llvm/lib/libLLVM*
-        - lib/zig-llvm/lib/libclang*
-        # Note: liblld* not needed - zig has built-in LLD, only needs headers
-        - lib/zig-llvm/include/llvm/**
-        - lib/zig-llvm/include/clang/**
-        - lib/zig-llvm/include/lld/**
+        - lib/zig-llvm/bin/clang-tblgen
         - lib/zig-llvm/bin/llvm-config
         - lib/zig-llvm/bin/llvm-config.real
+        - lib/zig-llvm/bin/llvm-min-tblgen
+        - lib/zig-llvm/bin/llvm-tblgen
+        - lib/zig-llvm/include/c++/*
+        - lib/zig-llvm/include/clang/*
+        - lib/zig-llvm/include/clang-c/*.h
+        - lib/zig-llvm/include/*libunwind*
+        - lib/zig-llvm/include/lld/Common/*{.inc,.h}
+        - lib/zig-llvm/include/llvm/*
+        - lib/zig-llvm/include/llvm-c/*.h
+        - lib/zig-llvm/include/mach-o/compact_unwind_encoding.h
+        - lib/zig-llvm/include/unwind*.h
+        - lib/zig-llvm/lib/clang/${{ version | split('.') | first }}/include/*
+        - lib/zig-llvm/lib/cmake/{clang,lld,llvm}/*{.cmake,.cpp.in}
+        - lib/zig-llvm/lib/libc++abi.so*
+        - lib/zig-llvm/lib/libclang*
+        - lib/zig-llvm/lib/libc++.modules.json
+        - lib/zig-llvm/lib/libc++.so*
+        - lib/zig-llvm/lib/liblld*.a
+        - lib/zig-llvm/lib/libLLVM*
+        - lib/zig-llvm/lib/libunwind*
         - lib/zig-llvm-path.txt
+        # Post-install test resources
+        - etc/conda/test-files/zig-llvm/*
 
-  # Test 2: Verify llvm-config works and returns valid information
+  # Verify llvm-config works and returns valid paths
   - script:
-      - echo "=== Testing llvm-config ==="
-      - LLVM_PATH=$(cat $PREFIX/lib/zig-llvm-path.txt)
-      - echo "LLVM_PATH=$LLVM_PATH"
-      - $LLVM_PATH/bin/llvm-config --version
-      - $LLVM_PATH/bin/llvm-config --prefix
-      - $LLVM_PATH/bin/llvm-config --libdir
-      - $LLVM_PATH/bin/llvm-config --includedir
-      - echo "=== llvm-config --components ==="
-      - $LLVM_PATH/bin/llvm-config --components | tr ' ' '\n' | head -20
-      - echo "=== Verifying paths exist ==="
-      - test -d "$($LLVM_PATH/bin/llvm-config --libdir)"
-      - test -d "$($LLVM_PATH/bin/llvm-config --includedir)"
+      - python testing/test_llvm_config.py
+    files:
+      recipe:
+        - testing/test_llvm_config.py
+    requirements:
+      run:
+        - python >=3.9
 
-  # Test 3: Verify shared libraries are valid
+  # Verify shared libraries: valid ELF, no libstdc++, GLIBC versions, symbols
   - script:
-      - echo "=== Testing shared libraries ==="
-      - LLVM_PATH=$(cat $PREFIX/lib/zig-llvm-path.txt)
-      - file $LLVM_PATH/lib/libLLVM*.so* | head -5
-      - file $LLVM_PATH/lib/libclang*.so* | head -5
-      - file $LLVM_PATH/lib/liblld*.so* | head -5
-      - echo "=== Checking library symbols (LLVM) ==="
-      - nm -D $LLVM_PATH/lib/libLLVM*.so 2>/dev/null | grep -c "LLVMContext" || echo "Symbol check skipped"
-      - echo "=== CRITICAL: Verifying no libstdc++ dependency (must use libc++) ==="
-      - echo "Checking libLLVM..."
-      - "! ldd $LLVM_PATH/lib/libLLVM*.so* 2>/dev/null | grep -q libstdc++"
-      - echo "Checking libclang..."
-      - "! ldd $LLVM_PATH/lib/libclang*.so* 2>/dev/null | grep -q libstdc++"
-      - echo "✅ No libstdc++ dependency - using libc++ as expected"
+      - python testing/test_shared_libs.py
+    files:
+      recipe:
+        - testing/test_shared_libs.py
+    requirements:
+      run:
+        - python >=3.9
+        - binutils
 
-  # Test 4: Verify llvm-config returns zig-llvm paths (not system/conda llvm)
+  # CRITICAL: Reproduce zig's ZigClangIsLLVMUsingSeparateLibcxx() check.
+  # Uses ctypes to dlopen the actual installed libLLVM.so and libclang-cpp.so,
+  # checks NEEDED entries, symbol binding, and compares runtime addresses of
+  # std::generic_category().  Separate hidden copies → FAIL.
   - script:
-      - echo "=== Verifying llvm-config paths are namespaced ==="
-      - LLVM_PATH=$(cat $PREFIX/lib/zig-llvm-path.txt)
-      - echo "Expected prefix: $LLVM_PATH"
-      - REPORTED_PREFIX=$($LLVM_PATH/bin/llvm-config --prefix)
-      - echo "Reported prefix: $REPORTED_PREFIX"
-      - test "$REPORTED_PREFIX" = "$LLVM_PATH"
-      - echo "=== Verifying version matches ==="
-      - LLVM_VERSION=$($LLVM_PATH/bin/llvm-config --version)
-      - echo "LLVM version: $LLVM_VERSION"
-      - echo "$LLVM_VERSION" | grep -q "^20\."
-      - echo "✅ Version and paths verified"
+      - python testing/test_libc++_shared.py
+    files:
+      recipe:
+        - testing/test_libc++_shared.py
+    requirements:
+      run:
+        - python >=3.9
+        - binutils
 
-  # Test 5: Verify RPATH and libc++ linkage
+  # Verify zig can use this LLVM (requires zig in test env)
   - script:
-      - echo "=== Checking RPATH (libraries should be self-contained) ==="
-      - LLVM_PATH=$(cat $PREFIX/lib/zig-llvm-path.txt)
-      - readelf -d $LLVM_PATH/lib/libLLVM*.so* 2>/dev/null | grep -E "RPATH|RUNPATH" | head -3 || echo "No RPATH (static linkage or system paths)"
-      - echo "=== Verifying libc++ is linked (not just absence of libstdc++) ==="
-      - ldd $LLVM_PATH/lib/libLLVM*.so* 2>/dev/null | grep -E "libc\+\+|libunwind" || echo "Note: libc++ may be statically linked"
-
-  # Test 6: Verify zig can use this LLVM (requires zig in test env)
-  - script:
-      - echo "=== Testing zig compatibility ==="
-      - LLVM_PATH=$(cat $PREFIX/lib/zig-llvm-path.txt)
-      - export ZIG_LIB_DIR=$LLVM_PATH
-      - echo "ZIG_LIB_DIR=$ZIG_LIB_DIR"
       - zig version
-      - echo "=== Zig LLVM backend check ==="
-      - zig targets | head -20
+      - zig targets 2>/dev/null | head -20 || true  # pipe causes WriteFailed; ignore
     requirements:
       run:
         - zig >=0.15.2
