@@ -1,3 +1,18 @@
-# Agent cache files
-*
-!.gitignore
+# Build artifacts and cache
+output/
+cache/
+bin/
+include/
+lib/
+share/
+logs/
+
+# Dev tooling
+.claude/
+.mcp.json
+.serena/
+
+# Analysis docs (not part of recipe)
+*.md
+*.txt
+fix-libcxx-needed.sh

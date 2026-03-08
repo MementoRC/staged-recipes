@@ -118,33 +118,24 @@ requirements:
     - ${{ pin_subpackage(name, upper_bound='x.x') }}
 
 tests:
-  # Verify package structure
+  # Verify package structure (common files across all platforms)
   - package_contents:
-      strict: true
       files:
-        - lib/zig-llvm/bin/clang-tblgen
         - lib/zig-llvm/bin/llvm-config
         - lib/zig-llvm/bin/llvm-config.real
-        - lib/zig-llvm/bin/llvm-min-tblgen
-        - lib/zig-llvm/bin/llvm-tblgen
         - lib/zig-llvm/include/c++/*
         - lib/zig-llvm/include/clang/*
         - lib/zig-llvm/include/clang-c/*.h
-        - lib/zig-llvm/include/*libunwind*
         - lib/zig-llvm/include/lld/Common/*{.inc,.h}
         - lib/zig-llvm/include/llvm/*
         - lib/zig-llvm/include/llvm-c/*.h
-        - lib/zig-llvm/include/mach-o/compact_unwind_encoding.h
-        - lib/zig-llvm/include/unwind*.h
         - lib/zig-llvm/lib/clang/${{ version | split('.') | first }}/include/*
         - lib/zig-llvm/lib/cmake/{clang,lld,llvm}/*{.cmake,.cpp.in}
         - lib/zig-llvm/lib/libc++abi*${{ so }}*
         - lib/zig-llvm/lib/libclang-cpp*${{ so }}*
-        - lib/zig-llvm/lib/libc++.modules.json
         - lib/zig-llvm/lib/libc++*${{ so }}*
         - lib/zig-llvm/lib/liblld*.a
         - lib/zig-llvm/lib/libLLVM*${{ so }}*
-        - lib/zig-llvm/lib/libunwind*${{ so }}*
         - lib/zig-llvm-path.txt
         # Post-install test resources
         - etc/conda/test-files/zig-llvm/*
@@ -159,7 +150,7 @@ tests:
       run:
         - python >=3.9
 
-  # Verify shared libraries: valid ELF, no libstdc++, GLIBC versions, symbols
+  # Verify shared libraries: valid format, no libstdc++, GLIBC versions, symbols
   - script:
       - python testing/test_shared_libs.py
     files:
@@ -168,11 +159,13 @@ tests:
     requirements:
       run:
         - python >=3.9
-        - binutils
+        - if: linux
+          then:
+            - binutils
 
   # CRITICAL: Reproduce zig's ZigClangIsLLVMUsingSeparateLibcxx() check.
-  # Uses ctypes to dlopen the actual installed libLLVM.so and libclang-cpp.so,
-  # checks NEEDED entries, symbol binding, and compares runtime addresses of
+  # Uses ctypes to dlopen the actual installed shared libraries,
+  # checks dependency entries, symbol binding, and compares runtime addresses of
   # std::generic_category().  Separate hidden copies → FAIL.
   - script:
       - python testing/test_libc++_shared.py
@@ -182,7 +175,9 @@ tests:
     requirements:
       run:
         - python >=3.9
-        - binutils
+        - if: linux
+          then:
+            - binutils
 
   # Verify zig can use this LLVM (requires zig in test env)
   - script:
