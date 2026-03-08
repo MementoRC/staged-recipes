@@ -1,13 +1,14 @@
 schema_version: 1
 
 context:
-  build_number: 1
+  build_number: 0
   name: zig-llvm
   version: 20.1.8
 
   library: ${{ "Library/" if not unix }}
   m2: ${{ "m2-" if not unix }}
   sh: ${{ ".bat" if not unix else ".sh" }}
+  so: ${{ ".so" if linux else ".dylib" if osx else ".dll" }}
 
   # Zig triplet mapping (for zig -target flag)
   zig_triplet: >-
@@ -19,22 +20,22 @@ context:
       "s390x-linux-gnu." ~ c_stdlib_version        if target_platform == "linux-s390x"    else
       "x86_64-macos-none"                          if target_platform == "osx-64"         else
       "aarch64-macos-none"                         if target_platform == "osx-arm64"      else
-      "x86_64-windows-gnu"                         if target_platform == "win-64"         else
-      "aarch64-windows-gnu"                        if target_platform == "win-arm64"      else
+      "aarch64-windows-gnu"                        if not unix and arm64                  else
+      "x86_64-windows-gnu"                         if not unix                            else
       "native"
     }}
   # LLVM target triple (standard format, no glibc version suffix)
   llvm_triplet: >-
     ${{
-      "x86_64-unknown-linux-gnu"       if target_platform == "linux-64"       else
-      "aarch64-unknown-linux-gnu"      if target_platform == "linux-aarch64"  else
-      "powerpc64le-unknown-linux-gnu"  if target_platform == "linux-ppc64le"  else
-      "riscv64-unknown-linux-gnu"      if target_platform == "linux-riscv64"  else
-      "s390x-unknown-linux-gnu"        if target_platform == "linux-s390x"    else
-      "x86_64-apple-darwin"            if target_platform == "osx-64"         else
-      "aarch64-apple-darwin"           if target_platform == "osx-arm64"      else
-      "x86_64-w64-windows-gnu"         if target_platform == "win-64"         else
-      "aarch64-w64-windows-gnu"        if target_platform == "win-arm64"      else
+      "x86_64-unknown-linux-gnu"                   if target_platform == "linux-64"       else
+      "aarch64-unknown-linux-gnu"                  if target_platform == "linux-aarch64"  else
+      "powerpc64le-unknown-linux-gnu"              if target_platform == "linux-ppc64le"  else
+      "riscv64-unknown-linux-gnu"                  if target_platform == "linux-riscv64"  else
+      "s390x-unknown-linux-gnu"                    if target_platform == "linux-s390x"    else
+      "x86_64-apple-darwin"                        if target_platform == "osx-64"         else
+      "aarch64-apple-darwin"                       if target_platform == "osx-arm64"      else
+      "x86_64-w64-windows-gnu"                     if not unix and arm64                  else
+      "aarch64-w64-windows-gnu"                    if not unix                            else
       "native"
     }}
 
@@ -61,8 +62,23 @@ build:
     env:
       LLVM_TRIPLET: ${{ llvm_triplet }}
       ZIG_TRIPLET: ${{ zig_triplet }}
-      ZIG_LLVM_SKIP_BUILD: 1
+      # ZIG_LLVM_SKIP_BUILD: 1
+      
+      # --- BOOTSTRAPPING ---
+      CONDA_BUILD_ZIG: >-
+        ${{
+          "x86_64-conda-linux-gnu"                 if build_platform == "linux-64"    else
+          "x86_64-apple-darwin13.4.0"              if build_platform == "osx-64"      else
+          "arm64-apple-darwin20.0.0"               if build_platform == "osx-arm64"   else
+          "aarch64-w64-mingw32"                    if not unix and arm64              else
+          "x86_64-w64-mingw32"                     if not unix                        else
+          "unknown"
+        }}-zig
 
+  # --- DEBUG ---
+  skip: linux
+  # --- DEBUG ---
+    
 requirements:
   build:
     - ${{ stdlib('c') }}
@@ -70,26 +86,34 @@ requirements:
     - cmake >=3.19
     - git
     - ninja
-    - if: linux
+    - if: not osx
       then:
         - lld
+    - if: linux
+      then:
         - patchelf
-    - zig >=0.15.2 *_7
     # Cross-compilation: need host tablegen tools (provided by zig-llvm itself)
     - if: build_platform != target_platform
       then:
-        - ${{ name }} ${{ version }}.*
+        - libxml2
+        - zig_${{ target_platform }}
+        - zlib
+        - zstd
+        - if: osx
+          then:
+            - libxml2-devel
+        # - ${{ name }} ${{ version }}.*
+      else:
+        - zig_${{ build_platform }}
     - if: not unix
       then:
         - ${{ m2 }}coreutils
         - ${{ m2 }}findutils
-    # - if: osx
-    #   then:
-    #     - libcxx
+        - pkg-config
   host:
+    - libxml2
     - zlib
     - zstd
-    # - libxml2
   run_exports:
     - ${{ pin_subpackage(name, upper_bound='x.x') }}
 
@@ -114,13 +138,13 @@ tests:
         - lib/zig-llvm/include/unwind*.h
         - lib/zig-llvm/lib/clang/${{ version | split('.') | first }}/include/*
         - lib/zig-llvm/lib/cmake/{clang,lld,llvm}/*{.cmake,.cpp.in}
-        - lib/zig-llvm/lib/libc++abi.so*
-        - lib/zig-llvm/lib/libclang*
+        - lib/zig-llvm/lib/libc++abi*${{ so }}*
+        - lib/zig-llvm/lib/libclang-cpp*${{ so }}*
         - lib/zig-llvm/lib/libc++.modules.json
-        - lib/zig-llvm/lib/libc++.so*
+        - lib/zig-llvm/lib/libc++*${{ so }}*
         - lib/zig-llvm/lib/liblld*.a
-        - lib/zig-llvm/lib/libLLVM*
-        - lib/zig-llvm/lib/libunwind*
+        - lib/zig-llvm/lib/libLLVM*${{ so }}*
+        - lib/zig-llvm/lib/libunwind*${{ so }}*
         - lib/zig-llvm-path.txt
         # Post-install test resources
         - etc/conda/test-files/zig-llvm/*
